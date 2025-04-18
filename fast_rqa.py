@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.neighbors import KDTree
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import KNNImputer
+from sklearn.model_selection import ParameterGrid
 import sys
 import time
 from tqdm import tqdm
@@ -116,6 +117,76 @@ def rqa(X, impute = False):
         return (lyap_timeseries, is_imputed)
     
     return lyap_timeseries
+
+def optimize(X, param_grid=None, objective_fn=None, impute=True, verbose=True):
+    """
+    Optimize RQA parameters using grid search.
+
+    Parameters:
+        X: np.array - 1D time series input
+        param_grid: dict - dictionary of parameter ranges
+        objective_fn: callable - scoring function taking lyap_series, imputed_mask → score
+        impute: bool - whether to use imputation in rqa
+        verbose: bool - print results or not
+
+    Returns:
+        best_params: dict - parameters that maximize the objective
+        best_score: float
+        best_series: np.array - best Lyapunov series found
+    """
+    
+    # this is hella stupid but i dont have the time to find a better approach
+    if param_grid is None:
+        param_grid = {
+            'epsilon': [0.2, 0.3, 0.4],
+            'tau': [1],
+            'd_E': [4, 6],
+            'W': [2, 3],
+            'm': [3, 5],
+            'window': [10, 13],
+        }
+        print("Set param grid to default")
+
+    if objective_fn is None:
+        def objective_fn(lyap, mask):
+            # maximize stdev, penalize imputations/nan
+            return np.nanstd(lyap) - 0.5 * np.sum(mask) / len(lyap)
+
+    best_score = -np.inf
+    best_params = None
+    best_imputed = None # corresponding to best_series
+    best_series = None
+
+    for params in ParameterGrid(param_grid):
+        # Set module-level globals to be picked up in rqa()
+        globals().update(params)
+        globals()["min_points"] = params["d_E"] + 1
+
+        try:
+            result = rqa(X, impute=impute)
+            if impute:
+                lyap_series, imputed_mask = result
+            else:
+                lyap_series = result
+                imputed_mask = np.isnan(lyap_series)
+
+            score = objective_fn(lyap_series, imputed_mask)
+
+            if score > best_score:
+                best_score = score
+                best_params = params.copy()
+                best_imputed = imputed_mask.copy()
+                best_series = lyap_series.copy()
+
+            if verbose:
+                print(f"Params: {params} | Score: {score:.4f}")
+
+        except Exception as e:
+            if verbose:
+                print(f"Params {params} failed: {e}")
+            continue
+        
+    return best_series, best_imputed, best_params, best_score, 
 
 if __name__ == "__main__":
     np.random.seed(42)
